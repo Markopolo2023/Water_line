@@ -1,0 +1,7 @@
+python-docx
+PyPDF2
+pandas
+sqlalchemy
+pyodbc
+dash
+plotly
