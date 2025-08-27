@@ -1,46 +1,41 @@
 # app.py (Dash dashboard app)
-
 import dash
-from dash import dcc, html, dash_table
+from dash import dcc, html
 from dash.dependencies import Input, Output
 import plotly.express as px
 import pandas as pd
 import sqlite3
 import os
 
-# Path to the SQLite database (assuming it's in the project root; adjust if needed)
-DB_PATH = 'reports.db'  # Produced by report_processor.py in data_processing
+# Path to the SQLite database
+DB_PATH = os.path.join('data_processing', 'reports.db')
 
 
 # Function to load data from SQLite
 def load_data():
     if not os.path.exists(DB_PATH):
+        print("Database not found at:", DB_PATH)
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
-
     conn = sqlite3.connect(DB_PATH)
+    try:
+        reports_df = pd.read_sql_query("SELECT * FROM reports", conn)
+        print("reports_df columns:", reports_df.columns.tolist())
+    except Exception as e:
+        print("Error loading reports:", e)
+        reports_df = pd.DataFrame()
 
-    # Load reports
-    reports_df = pd.read_sql_query("SELECT * FROM reports", conn)
+    try:
+        systems_df = pd.read_sql_query("SELECT * FROM systems", conn)
+        print("systems_df columns:", systems_df.columns.tolist())
+    except Exception as e:
+        print("Error loading systems:", e)
+        systems_df = pd.DataFrame()
 
-    # Load systems
-    systems_df = pd.read_sql_query("SELECT * FROM systems", conn)
-
-    # Load metrics and pivot for easier visualization (metric_key as columns)
-    metrics_df = pd.read_sql_query("SELECT * FROM metrics", conn)
-    metrics_pivot = metrics_df.pivot_table(
-        index='system_id',
-        columns='metric_key',
-        values='metric_value',
-        aggfunc='first'  # Since values are unique per key
-    ).reset_index()
-
-    # Join dataframes for comprehensive views
-    systems_with_reports = systems_df.merge(reports_df, left_on='report_id', right_on='id',
-                                            suffixes=('_system', '_report'))
-    full_df = systems_with_reports.merge(metrics_pivot, left_on='id_system', right_on='system_id')
-
+    # Merge reports and systems
+    full_df = systems_df.merge(reports_df, left_on='report_id', right_on='id', suffixes=('_system', '_report'),
+                               how='left')
+    print("full_df columns:", full_df.columns.tolist())
     conn.close()
-
     return reports_df, systems_df, full_df
 
 
@@ -50,7 +45,7 @@ reports_df, systems_df, full_df = load_data()
 # Initialize Dash app with a modern, futuristic theme
 app = dash.Dash(__name__)
 
-# Custom CSS for futuristic, simple, modern look (dark background, neon accents, clean fonts)
+# Custom CSS for futuristic, simple, modern look
 app.index_string = '''
 <!DOCTYPE html>
 <html>
@@ -61,8 +56,8 @@ app.index_string = '''
         {%css%}
         <style>
             body {
-                background-color: #0a0a0a;  /* Dark black background */
-                color: #e0e0e0;  /* Light gray text */
+                background-color: #0a0a0a;
+                color: #e0e0e0;
                 font-family: 'Arial', sans-serif;
                 margin: 0;
                 padding: 20px;
@@ -72,27 +67,16 @@ app.index_string = '''
                 margin: auto;
             }
             h1, h2, h3 {
-                color: #00ffcc;  /* Neon cyan for headers */
+                color: #00ffcc;
                 text-shadow: 0 0 5px #00ffcc;
             }
             .card {
-                background-color: #1a1a1a;  /* Dark gray cards */
-                border: 1px solid #00ffcc;  /* Neon border */
+                background-color: #1a1a1a;
+                border: 1px solid #00ffcc;
                 border-radius: 8px;
                 padding: 15px;
                 margin-bottom: 20px;
-                box-shadow: 0 0 10px rgba(0, 255, 204, 0.3);  /* Glowing shadow */
-            }
-            .dash-table-container .dash-spreadsheet-container {
-                background-color: #1a1a1a;
-                color: #e0e0e0;
-            }
-            .dash-table-container th {
-                background-color: #333333;
-                color: #00ffcc;
-            }
-            .dash-table-container td {
-                border: 1px solid #444444;
+                box-shadow: 0 0 10px rgba(0, 255, 204, 0.3);
             }
             .plotly-graph {
                 border: 1px solid #00ffcc;
@@ -112,7 +96,13 @@ app.index_string = '''
 </html>
 '''
 
-# Dashboard layout: Simple, sectioned structure
+# Identify numeric columns for metrics from systems table
+numeric_columns = ['cond', 'ph', 'temp', 'p_alk', 'm_alk', 'chloride', 'hardness',
+                   'calcium', 'po4', 'so3', 'mo', 'no2', 'live_atp', 'free_chlorine',
+                   'total_chlorine', 'max_temp']
+metric_options = [col for col in numeric_columns if col in full_df.columns]
+
+# Dashboard layout
 app.layout = html.Div(className='dashboard-container', children=[
     html.H1('Water Treatment Dashboard', style={'textAlign': 'center'}),
 
@@ -125,93 +115,137 @@ app.layout = html.Div(className='dashboard-container', children=[
                 html.P('Total Reports')
             ], style={'textAlign': 'center', 'width': '33%', 'display': 'inline-block'}),
             html.Div([
-                html.H3(f"{len(reports_df['site_name'].unique())}"),
-                html.P('Unique Sites')
+                html.H3(f"{len(reports_df['facility'].unique()) if not reports_df.empty else 0}"),
+                html.P('Unique Facilities')
             ], style={'textAlign': 'center', 'width': '33%', 'display': 'inline-block'}),
             html.Div([
-                html.H3(f"{len(reports_df['technician'].unique())}"),
-                html.P('Technicians')
+                html.H3(f"{len(reports_df['chemist'].dropna().unique()) if not reports_df.empty else 0}"),
+                html.P('Chemists')
             ], style={'textAlign': 'center', 'width': '33%', 'display': 'inline-block'})
         ])
     ]),
 
-    # Section 2: Reports Table
-    html.Div(className='card', children=[
-        html.H2('Reports List'),
-        dash_table.DataTable(
-            id='reports-table',
-            columns=[{"name": i, "id": i} for i in reports_df.columns],
-            data=reports_df.to_dict('records'),
-            style_table={'overflowX': 'auto'},
-            page_size=10,
-            sort_action="native",
-            filter_action="native"
-        )
-    ]),
-
-    # Section 3: Metrics Visualization
+    # Section 2: Metrics Visualization with selections
     html.Div(className='card', children=[
         html.H2('Metrics Analysis'),
         dcc.Dropdown(
+            id='facility-dropdown',
+            options=[{'label': f, 'value': f} for f in sorted(full_df['facility'].unique()) if not full_df.empty],
+            placeholder="Select a Facility"
+        ),
+        dcc.Dropdown(
+            id='system-dropdown',
+            options=[],
+            placeholder="Select a System"
+        ),
+        dcc.Dropdown(
             id='metric-dropdown',
-            options=[{'label': col, 'value': col} for col in full_df.columns if
-                     col not in ['id_system', 'report_id', 'id_report', 'system_id', 'comments', 'file_name',
-                                 'site_name', 'date', 'technician', 'system_type', 'system_name']],
-            value='no2' if 'no2' in full_df.columns else None,  # Default to 'no2' if available
+            options=[{'label': col, 'value': col} for col in metric_options],
+            value='cond' if 'cond' in metric_options else None,
             placeholder="Select a Metric"
         ),
         dcc.Graph(id='metric-chart')
     ]),
 
-    # Section 4: Systems Details
+    # Section 3: Impact
     html.Div(className='card', children=[
-        html.H2('Systems Details'),
-        dash_table.DataTable(
-            id='systems-table',
-            columns=[{"name": i, "id": i} for i in systems_df.columns],
-            data=systems_df.to_dict('records'),
-            style_table={'overflowX': 'auto'},
-            page_size=10,
-            sort_action="native",
-            filter_action="native"
-        )
+        html.H2('Impact'),
+        html.Div(id='impact')
+    ]),
+
+    # Section 4: Improvements
+    html.Div(className='card', children=[
+        html.H2('Improvements'),
+        html.Div(id='improvements')
     ])
 ])
 
 
-# Callback for updating the metric chart
+# Callback to update system dropdown based on facility selection
 @app.callback(
-    Output('metric-chart', 'figure'),
-    Input('metric-dropdown', 'value')
+    Output('system-dropdown', 'options'),
+    Input('facility-dropdown', 'value')
 )
-def update_chart(selected_metric):
-    if selected_metric is None or selected_metric not in full_df.columns:
-        return px.bar(title='Select a metric to view')
+def update_system_dropdown(selected_facility):
+    if selected_facility is None or full_df.empty:
+        return []
+    systems = full_df[full_df['facility'] == selected_facility]['system_name'].unique()
+    return [{'label': s, 'value': s} for s in sorted(systems)]
 
-    # Attempt to convert to numeric for charting (handle non-numeric gracefully)
-    full_df[selected_metric] = pd.to_numeric(full_df[selected_metric], errors='coerce')
 
-    fig = px.bar(
-        full_df.dropna(subset=[selected_metric]),
+# Callback for updating the metric chart, impact, and improvements
+@app.callback(
+    [
+        Output('metric-chart', 'figure'),
+        Output('impact', 'children'),
+        Output('improvements', 'children')
+    ],
+    [
+        Input('facility-dropdown', 'value'),
+        Input('system-dropdown', 'value'),
+        Input('metric-dropdown', 'value')
+    ]
+)
+def update_content(selected_facility, selected_system, selected_metric):
+    if None in (
+    selected_facility, selected_system, selected_metric) or full_df.empty or selected_metric not in full_df.columns:
+        return (
+            px.line(title='No data available or select facility, system, and metric'),
+            [html.P('No data available or select facility, system, and metric to view impact.')],
+            [html.P('No data available or select facility, system, and metric to view improvements.')]
+        )
+
+    df = full_df[(full_df['facility'] == selected_facility) & (full_df['system_name'] == selected_system)].copy()
+    df[selected_metric] = pd.to_numeric(df[selected_metric], errors='coerce')
+    df = df.dropna(subset=[selected_metric]).sort_values('date')
+
+    if len(df) == 0:
+        return (
+            px.line(title='No data available'),
+            [html.P('No data available for impact assessment.')],
+            [html.P('No data available for improvement suggestions.')]
+        )
+
+    # Create line chart for value over time
+    fig = px.line(
+        df,
         x='date',
         y=selected_metric,
-        color='site_name',
-        title=f'{selected_metric.upper()} Levels Over Time',
+        title=f'{selected_metric.upper()} Levels Over Time for {selected_system} at {selected_facility}',
         labels={'date': 'Date', selected_metric: selected_metric.upper()},
-        template='plotly_dark'  # Dark theme for futuristic look
+        template='plotly_dark'
     )
-
-    # Customize for futuristic style
     fig.update_layout(
         plot_bgcolor='#1a1a1a',
         paper_bgcolor='#0a0a0a',
         font_color='#e0e0e0',
         title_font_color='#00ffcc'
     )
-    fig.update_traces(marker_line_color='#00ffcc', marker_line_width=1.5)
+    fig.update_traces(line_color='#00ffcc', line_width=3)
 
-    return fig
+    # Placeholder logic for impact and improvements
+    if len(df) < 2:
+        impact_text = 'Not enough data points to assess impact on budget or savings.'
+        improvements_text = 'Not enough data points to suggest improvements.'
+    else:
+        initial = df.iloc[0][selected_metric]
+        final = df.iloc[-1][selected_metric]
+        delta = final - initial
+        if delta > 0:
+            trend = 'increased'
+        elif delta < 0:
+            trend = 'decreased'
+        else:
+            trend = 'remained the same'
+        impact_text = f'The {selected_metric} level has {trend} from {initial:.2f} to {final:.2f}, potentially impacting the budget. (Add calculations for savings/loss here.)'
+        improvements_text = f'To improve the {selected_metric} values, consider adjustments based on the trend. (Add specific suggestions here.)'
+
+    return (
+        fig,
+        [html.P(impact_text)],
+        [html.P(improvements_text)]
+    )
 
 
 if __name__ == '__main__':
-    app.run_server(debug=True)
+    app.run(debug=True)

@@ -5,3 +5,6 @@ sqlalchemy
 pyodbc
 dash
 plotly
+pytesseract
+pdf2image
+pdfplumber

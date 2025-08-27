@@ -1,1 +1,1 @@
-from .report_processor import ReportProcessor
+from .report_processor import process_reports
