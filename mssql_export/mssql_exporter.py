@@ -1,49 +1,280 @@
-# mssql_exporter.py
-
-import pandas as pd
+import os
+import json
 import sqlite3
-from sqlalchemy import create_engine
-from typing import Optional
+import pyodbc
 
+# Define directories (relative to the script location in mssql_export)
+hr_dir = os.path.abspath(os.path.join('..', 'data_processing', 'data_processing'))
+pr_dir = os.path.abspath(os.path.join('..', 'data_processing', 'data_processing'))
 
-class MSSQLExporter:
-    def __init__(self, sqlite_db_path: str = 'reports.db',
-                 mssql_connection_string: str = 'mssql+pyodbc://username:password@server/dbname?driver=ODBC+Driver+17+for+SQL+Server'):
-        self.sqlite_db_path = sqlite_db_path
-        self.mssql_connection_string = mssql_connection_string
+# Function to clean column names for SQL
+def clean_column(name):
+    if name is None:
+        return None
+    name = name.replace("\n", " ").replace("µ", "u").replace(".", "").replace("°", "").strip()
+    name = ''.join(c if c.isalnum() or c == ' ' else '' for c in name)
+    name = name.replace(" ", "_")
+    return name
 
-    def export_to_mssql(self) -> Optional[str]:
+# Standard column mapping for similar measurements
+column_mapping = {
+    'P_Alkalinity_CaCO3_mgL': 'p_alkalinity',
+    'P_Alk': 'p_alkalinity',
+    'M_Alkalinity_CaCO3_mgL': 'm_alkalinity',
+    'M_Alk': 'm_alkalinity',
+    'Cl_mgL': 'chloride',
+    'Chloride': 'chloride',
+    'Hardness_CaCO3_mgL': 'hardness',
+    'Hardness': 'hardness',
+    'Ca_CaCO3_mgL': 'calcium',
+    'Calcium': 'calcium',
+    'Cond_uScm': 'conductivity',
+    'Cond': 'conductivity',
+    'pH': 'ph',
+    'Temp_C': 'temperature',
+    'Temp': 'temperature',
+    'NO2_mgL': 'no2',
+    'NO2': 'no2',
+    'FREE_CHLORINE_ppm': 'free_chlorine',
+    'Free_Chlorine': 'free_chlorine',
+    'TOTAL_CHLORINE_ppm': 'total_chlorine',
+    'Total_Chlorine': 'total_chlorine',
+    'Susp_Solids': 'susp_solids',
+    'PO4': 'po4',
+    'SO2': 'so2',
+    'Mo': 'mo',
+    'Live_ATP': 'live_atp',
+    'Glycol': 'glycol',
+    'Max_Temp': 'max_temperature'
+}
+
+# Collect all unique standardized parameter names
+params_set = set()
+for directory in [hr_dir, pr_dir]:
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith('.json'):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                    if "systems" in data and isinstance(data["systems"], list):
+                        for sys in data["systems"]:
+                            for key in sys:
+                                if key not in ["#", "System Type", "System Name"]:
+                                    cleaned = clean_column(key)
+                                    standard = column_mapping.get(cleaned, cleaned.lower())
+                                    params_set.add(standard)
+                    elif "measurements" in data and isinstance(data["measurements"], list):
+                        for meas in data["measurements"]:
+                            for key in meas:
+                                if key != "distribution":
+                                    cleaned = clean_column(key)
+                                    standard = column_mapping.get(cleaned, cleaned.lower())
+                                    params_set.add(standard)
+                except Exception as e:
+                    print(f"Error loading {file_path}: {e}")
+
+if not params_set:
+    print("Warning: No parameters found in JSON files. Check file contents or directories.")
+params = sorted(params_set)
+
+# Create SQLite database
+sqlite_db = 'combined.db'
+conn = sqlite3.connect(sqlite_db)
+cur = conn.cursor()
+
+# Create documents table
+cur.execute('''
+CREATE TABLE IF NOT EXISTS documents (
+    id INTEGER PRIMARY KEY,
+    filename TEXT
+)
+''')
+
+# Create data table with dynamic columns
+base_columns = '''
+id INTEGER PRIMARY KEY,
+document_id INTEGER,
+facility_name TEXT,
+date TEXT,
+chemist TEXT,
+system_type TEXT,
+system_name TEXT
+'''
+data_columns = ', '.join([f'"{cp}" TEXT' for cp in params]) if params else ''
+create_table_query = f'''
+CREATE TABLE IF NOT EXISTS data (
+    {base_columns}
+    {',' + data_columns if data_columns else ''}
+)
+'''.strip()
+try:
+    cur.execute(create_table_query)
+except sqlite3.OperationalError as e:
+    print(f"Error creating data table: {e}")
+    print(f"Query: {create_table_query}")
+    raise
+
+# Check existing columns in the data table and add new ones
+cur.execute("PRAGMA table_info(data)")
+existing_columns = {row[1] for row in cur.fetchall()} - {'id', 'document_id', 'facility_name', 'date', 'chemist', 'system_type', 'system_name'}
+for param in params:
+    if param not in existing_columns:
         try:
-            # Connect to SQLite
-            sqlite_conn = sqlite3.connect(self.sqlite_db_path)
+            cur.execute(f'ALTER TABLE data ADD COLUMN "{param}" TEXT')
+            print(f"Added new column: {param}")
+        except sqlite3.OperationalError as e:
+            print(f"Error adding column {param}: {e}")
+conn.commit()
 
-            # Read data from SQLite tables
-            reports_df = pd.read_sql_query("SELECT * FROM reports", sqlite_conn)
-            systems_df = pd.read_sql_query("SELECT * FROM systems", sqlite_conn)
-            metrics_df = pd.read_sql_query("SELECT * FROM metrics", sqlite_conn)
+# Process directories
+for directory in [hr_dir, pr_dir]:
+    for root, _, files in os.walk(directory):
+        for file in files:
+            if file.lower().endswith('.json'):
+                file_path = os.path.join(root, file)
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        jsondata = json.load(f)
+                    # Insert into documents
+                    cur.execute('INSERT INTO documents (filename) VALUES (?)', (file,))
+                    doc_id = cur.lastrowid
+                    facility = jsondata.get("facility_name") or jsondata.get("facility")
+                    date = jsondata.get("date")
+                    chemist = jsondata.get("field_chemist") or jsondata.get("person")
+                    chemist = chemist.replace("Page 1 of 1 ", "").strip() if chemist else None
+                    inserted = False
+                    if "systems" in jsondata and isinstance(jsondata["systems"], list):
+                        for sys in jsondata["systems"]:
+                            # Skip invalid or header rows
+                            if sys.get("#") == "#" or '\n' in str(sys.get("System Type", "")) or '\n' in str(sys.get("System Name", "")) or sys.get("System Type") == "-" or sys.get("System Type") is None:
+                                continue
+                            sys_type = sys.get("System Type")
+                            sys_name = sys.get("System Name")
+                            # Standardize parameters
+                            standard_dict = {}
+                            for raw_key in sys:
+                                if raw_key not in ["#", "System Type", "System Name"]:
+                                    cleaned = clean_column(raw_key)
+                                    standard = column_mapping.get(cleaned, cleaned.lower())
+                                    val = sys.get(raw_key)
+                                    standard_dict[standard] = str(val) if val is not None else None
+                            values = [doc_id, facility, date, chemist, sys_type, sys_name] + [standard_dict.get(p, None) for p in params]
+                            placeholders = ','.join(['?'] * len(values))
+                            columns = 'document_id, facility_name, date, chemist, system_type, system_name' + ( ', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
+                            cur.execute(f'INSERT INTO data ({columns}) VALUES ({placeholders})', values)
+                            inserted = True
+                    elif "measurements" in jsondata:
+                        measurements = jsondata["measurements"]
+                        if measurements != "Not found" and isinstance(measurements, list):
+                            for meas in measurements[1:]:  # Skip header
+                                sys_type = None
+                                sys_name = meas.get("distribution")
+                                if sys_name is None or "Water Samples" in sys_name:
+                                    continue
+                                # Standardize parameters
+                                standard_dict = {}
+                                for raw_key in meas:
+                                    if raw_key != "distribution":
+                                        cleaned = clean_column(raw_key)
+                                        standard = column_mapping.get(cleaned, cleaned.lower())
+                                        val = meas.get(raw_key)
+                                        standard_dict[standard] = str(val) if val and val != '' else None
+                                values = [doc_id, facility, date, chemist, sys_type, sys_name] + [ standard_dict.get(p, None) for p in params]
+                                placeholders = ','.join(['?'] * len(values))
+                                columns = 'document_id, facility_name, date, chemist, system_type, system_name' + ( ', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
+                                cur.execute(f'INSERT INTO data ({columns}) VALUES ({placeholders})', values)
+                                inserted = True
+                    if inserted:
+                        conn.commit()
+                except Exception as e:
+                    print(f"Error processing {file_path}: {e}")
 
-            # Close SQLite connection
-            sqlite_conn.close()
+# Close SQLite connection
+conn.close()
 
-            # Connect to MSSQL using SQLAlchemy
-            engine = create_engine(self.mssql_connection_string)
+# Export to MSSQL
+# Configure your MSSQL connection details here
+server = 'your_server_name'  # e.g., 'localhost'
+database = 'your_database_name'
+username = 'your_username'
+password = 'your_password'
+driver = '{ODBC Driver 17 for SQL Server}'  # Adjust based on your installed ODBC driver
+conn_str = f'DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password}'
 
-            # Write to MSSQL (append to preserve existing data; use 'replace' if you want to overwrite)
-            reports_df.to_sql('reports', engine, if_exists='append', index=False)
-            systems_df.to_sql('systems', engine, if_exists='append', index=False)
-            metrics_df.to_sql('metrics', engine, if_exists='append', index=False)
+try:
+    mssql_conn = pyodbc.connect(conn_str)
+    mssql_cur = mssql_conn.cursor()
 
-            return "Data successfully exported to MSSQL."
-
-        except Exception as e:
-            return f"Error exporting to MSSQL: {str(e)}"
-
-
-if __name__ == "__main__":
-    # Example usage: Replace with your MSSQL connection string
-    exporter = MSSQLExporter(
-        sqlite_db_path='reports.db',
-        mssql_connection_string='mssql+pyodbc://username:password@server/dbname?driver=ODBC+Driver+17+for+SQL+Server'
+    # Create documents table in MSSQL
+    mssql_cur.execute('''
+    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='documents' AND xtype='U')
+    CREATE TABLE documents (
+        id INT PRIMARY KEY IDENTITY,
+        filename VARCHAR(255)
     )
-    result = exporter.export_to_mssql()
-    print(result)
+    ''')
+
+    # Create data table in MSSQL with dynamic columns
+    data_columns_mssql = ', '.join([f'[{cp}] VARCHAR(MAX)' for cp in params]) if params else ''
+    mssql_create_query = f'''
+    IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='data' AND xtype='U')
+    CREATE TABLE data (
+        id INT PRIMARY KEY IDENTITY,
+        document_id INT,
+        facility_name VARCHAR(255),
+        date VARCHAR(50),
+        chemist VARCHAR(255),
+        system_type VARCHAR(255),
+        system_name VARCHAR(255)
+        {',' + data_columns_mssql if data_columns_mssql else ''}
+    )
+    '''.strip()
+    try:
+        mssql_cur.execute(mssql_create_query)
+    except pyodbc.Error as e:
+        print(f"Error creating MSSQL data table: {e}")
+        print(f"Query: {mssql_create_query}")
+        raise
+
+    # Check and add new columns to MSSQL data table
+    mssql_cur.execute("SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'data'")
+    existing_mssql_columns = {row[0] for row in mssql_cur.fetchall()} - {'id', 'document_id', 'facility_name', 'date', 'chemist', 'system_type', 'system_name'}
+    for param in params:
+        if param not in existing_mssql_columns:
+            try:
+                mssql_cur.execute(f'ALTER TABLE data ADD [{param}] VARCHAR(MAX)')
+                print(f"Added new column to MSSQL: {param}")
+            except pyodbc.Error as e:
+                print(f"Error adding column {param} to MSSQL: {e}")
+    mssql_conn.commit()
+
+    # Reopen SQLite to fetch data
+    conn = sqlite3.connect(sqlite_db)
+    cur = conn.cursor()
+
+    # Export documents
+    docs = cur.execute('SELECT id, filename FROM documents').fetchall()
+    for row in docs:
+        mssql_cur.execute('INSERT INTO documents (filename) VALUES (?)', (row[1],))
+
+    # Export data
+    data_cols = ['document_id', 'facility_name', 'date', 'chemist', 'system_type', 'system_name'] + params
+    data_cols_str = ', '.join(data_cols)
+    placeholders_mssql = ','.join(['?'] * len(data_cols))
+    rows = cur.execute(f'SELECT {data_cols_str} FROM data').fetchall()
+    for row in rows:
+        mssql_cur.execute(
+            f'INSERT INTO data ({", ".join([f"[{c}]" for c in data_cols])}) VALUES ({placeholders_mssql})',
+            row
+        )
+    mssql_conn.commit()
+    print("Data exported to MSSQL successfully.")
+except Exception as e:
+    print("Error exporting to MSSQL:", str(e))
+finally:
+    if 'mssql_conn' in locals():
+        mssql_conn.close()
+    if 'conn' in locals():
+        conn.close()

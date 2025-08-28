@@ -8,7 +8,7 @@ import sqlite3
 import os
 
 # Path to the SQLite database
-DB_PATH = os.path.join('data_processing', 'reports.db')
+DB_PATH = os.path.join('data_processing', 'hand.db')
 
 
 # Function to load data from SQLite
@@ -18,10 +18,10 @@ def load_data():
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
     conn = sqlite3.connect(DB_PATH)
     try:
-        reports_df = pd.read_sql_query("SELECT * FROM reports", conn)
+        reports_df = pd.read_sql_query("SELECT * FROM hand", conn)
         print("reports_df columns:", reports_df.columns.tolist())
     except Exception as e:
-        print("Error loading reports:", e)
+        print("Error loading hand:", e)
         reports_df = pd.DataFrame()
 
     try:
@@ -31,7 +31,7 @@ def load_data():
         print("Error loading systems:", e)
         systems_df = pd.DataFrame()
 
-    # Merge reports and systems
+    # Merge hand and systems
     full_df = systems_df.merge(reports_df, left_on='report_id', right_on='id', suffixes=('_system', '_report'),
                                how='left')
     print("full_df columns:", full_df.columns.tolist())

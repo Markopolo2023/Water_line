@@ -8,3 +8,5 @@ plotly
 pytesseract
 pdf2image
 pdfplumber
+opencv-python
+pillow
