@@ -8,7 +8,7 @@ import sqlite3
 import os
 
 # Path to the SQLite database
-DB_PATH = os.path.join('data_processing', 'hand.db')
+DB_PATH = os.path.join('mssql_export', 'combined.db')
 
 
 # Function to load data from SQLite
