@@ -1,3 +1,4 @@
+scipy
 python-docx
 PyPDF2
 pandas
