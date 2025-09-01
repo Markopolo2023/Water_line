@@ -10,7 +10,7 @@ from datetime import datetime
 from rules import analyze_metric  # Import rules.py for Impact/Improvements logic
 
 # Path to the SQLite database
-DB_PATH = os.path.join('mssql_export', 'combined.db')
+DB_PATH = os.path.join('../Water_line/mssql_export', 'combined.db')
 
 
 # Function to load data from SQLite

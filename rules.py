@@ -57,6 +57,77 @@ METRIC_RULES = {
         'high_suggestion': 'Reduce inhibitor dosing; monitor for overfeed.',
         'low_suggestion': 'Increase nitrite-based inhibitor; check for oxygen ingress.'
     },
+    # Generic entries added for remaining column headers from JSON (normalized to lowercase/short forms where applicable)
+    'm_alkalinity': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High M-alkalinity may promote scaling or other issues, increasing maintenance costs.',
+        'low_impact': 'Low M-alkalinity may reduce buffering, leading to pH instability and potential corrosion.',
+        'high_suggestion': 'Adjust treatment to reduce alkalinity; consider blowdown or acid addition.',
+        'low_suggestion': 'Add alkalinity boosters; monitor pH and related metrics.'
+    },
+    'chloride': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High chloride levels may cause corrosion, leading to equipment damage.',
+        'low_impact': 'Low chloride is generally ideal, but extreme lows may indicate other imbalances.',
+        'high_suggestion': 'Reduce chloride through blowdown or source water treatment.',
+        'low_suggestion': 'Monitor for unexpected drops; ensure balanced water chemistry.'
+    },
+    'temperature': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High temperature may accelerate reactions like scaling or corrosion.',
+        'low_impact': 'Low temperature may reduce efficiency in certain systems.',
+        'high_suggestion': 'Improve cooling or insulation; monitor system operations.',
+        'low_suggestion': 'Adjust heating as needed; ensure optimal operating range.'
+    },
+    'po4': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High phosphate may indicate over-dosing or contamination, affecting water quality.',
+        'low_impact': 'Low phosphate may reduce inhibition effectiveness against scaling.',
+        'high_suggestion': 'Reduce phosphate dosing; check for sources of excess.',
+        'low_suggestion': 'Increase phosphate-based inhibitors if needed.'
+    },
+    'so2': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High sulfite may indicate over-dosing, wasting chemicals.',
+        'low_impact': 'Low sulfite may allow oxygen-related corrosion.',
+        'high_suggestion': 'Reduce sulfite addition; monitor oxygen levels.',
+        'low_suggestion': 'Increase sulfite for better oxygen scavenging.'
+    },
+    'mo': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High molybdate may indicate over-dosing, increasing costs.',
+        'low_impact': 'Low molybdate may reduce corrosion protection.',
+        'high_suggestion': 'Optimize molybdate dosing; avoid excess.',
+        'low_suggestion': 'Increase molybdate-based inhibitors.'
+    },
+    'calcium': {
+        'ideal_min': 0,
+        'ideal_max': 100,  # Placeholder; adjust based on standards
+        'impact_factor': 0.1,
+        'base_cost': 10000,
+        'high_impact': 'High calcium contributes to hardness and scaling issues.',
+        'low_impact': 'Low calcium is generally beneficial but may affect other balances.',
+        'high_suggestion': 'Use softeners or inhibitors to manage calcium levels.',
+        'low_suggestion': 'Monitor for corrosion if calcium is too low.'
+    },
     # ... (extend for all metrics in numeric_columns)
 }
 
