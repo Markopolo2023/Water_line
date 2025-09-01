@@ -6,8 +6,6 @@ sqlalchemy
 pyodbc
 dash
 plotly
-pytesseract
 pdf2image
 pdfplumber
-opencv-python
-pillow
+
