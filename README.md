@@ -5,7 +5,7 @@ This project automates the transformation of legacy water testing reports (PDFs 
 ## Quick Start
 - **Interactive Notebook**: Explore the pipeline in [jupyter_nb/IWT_Dashboard.ipynb](jupyter_nb/IWT_Dashboard.ipynb).
 - **Live Dashboard**: Run `Water_line/app.py` to launch the Dash app (see setup below).
-- **Visualization**:
+- **Visualization**: 
   ![Dashboard](jupyter_nb/screenshot.PNG)
 
 ## Setup
