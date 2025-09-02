@@ -15,6 +15,7 @@ This project automates the transformation of legacy water testing reports (PDFs 
 2. Install: `pip install -r requirements.txt`
 3. Run Notebook: `jupyter notebook notebook/Water_Treatment_Dashboard.ipynb`
 4. Run Dashboard: `python Water_line/app.py`
+5. Note that all sensative data was removed from project prior to upload. Will be uploading "dummy data" soon.
 
 ## Skills Demonstrated
 - Data extraction from unstructured PDFs/DOCX.
