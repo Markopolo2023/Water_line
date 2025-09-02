@@ -2,6 +2,8 @@ import os
 import json
 import sqlite3
 import pyodbc
+from dateutil.parser import parse as parse_date
+from datetime import datetime
 
 # Define directories (relative to the script location in mssql_export)
 hr_dir = os.path.abspath(os.path.join('..', 'data_processing', 'data_processing'))
@@ -15,6 +17,17 @@ def clean_column(name):
     name = ''.join(c if c.isalnum() or c == ' ' else '' for c in name)
     name = name.replace(" ", "_")
     return name
+
+# Function to standardize date format
+def standardize_date(date_str):
+    if not date_str or date_str.strip() == "":
+        return None
+    try:
+        parsed_date = parse_date(date_str, fuzzy=True)
+        return parsed_date.strftime('%Y-%m-%d')
+    except (ValueError, TypeError) as e:
+        print(f"Error parsing date '{date_str}': {e}")
+        return None
 
 # Standard column mapping for similar measurements
 column_mapping = {
@@ -128,7 +141,7 @@ for param in params:
             print(f"Error adding column {param}: {e}")
 conn.commit()
 
-# Process directories
+# Process directories with enhanced validation
 for directory in [hr_dir, pr_dir]:
     for root, _, files in os.walk(directory):
         for file in files:
@@ -141,17 +154,23 @@ for directory in [hr_dir, pr_dir]:
                     cur.execute('INSERT INTO documents (filename) VALUES (?)', (file,))
                     doc_id = cur.lastrowid
                     facility = jsondata.get("facility_name") or jsondata.get("facility")
-                    date = jsondata.get("date")
+                    if facility is None or facility.strip() == "":
+                        print(f"Warning: Skipping file {file_path} due to missing or empty facility_name or facility")
+                        continue
+                    # Standardize the date
+                    raw_date = jsondata.get("date")
+                    date = standardize_date(raw_date)
                     chemist = jsondata.get("field_chemist") or jsondata.get("person")
                     chemist = chemist.replace("Page 1 of 1 ", "").strip() if chemist else None
                     inserted = False
                     if "systems" in jsondata and isinstance(jsondata["systems"], list):
                         for sys in jsondata["systems"]:
                             # Skip invalid or header rows
-                            if sys.get("#") == "#" or '\n' in str(sys.get("System Type", "")) or '\n' in str(sys.get("System Name", "")) or sys.get("System Type") == "-" or sys.get("System Type") is None:
-                                continue
                             sys_type = sys.get("System Type")
                             sys_name = sys.get("System Name")
+                            if sys.get("#") == "#" or '\n' in str(sys_type) or '\n' in str(sys_name) or sys_type == "-" or sys_type is None or sys_name is None:
+                                print(f"Warning: Skipping invalid system in {file_path}: System Type={sys_type}, System Name={sys_name}")
+                                continue
                             # Standardize parameters
                             standard_dict = {}
                             for raw_key in sys:
@@ -162,7 +181,7 @@ for directory in [hr_dir, pr_dir]:
                                     standard_dict[standard] = str(val) if val is not None else None
                             values = [doc_id, facility, date, chemist, sys_type, sys_name] + [standard_dict.get(p, None) for p in params]
                             placeholders = ','.join(['?'] * len(values))
-                            columns = 'document_id, facility_name, date, chemist, system_type, system_name' + ( ', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
+                            columns = 'document_id, facility_name, date, chemist, system_type, system_name' + (', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
                             cur.execute(f'INSERT INTO data ({columns}) VALUES ({placeholders})', values)
                             inserted = True
                     elif "measurements" in jsondata:
@@ -171,7 +190,8 @@ for directory in [hr_dir, pr_dir]:
                             for meas in measurements[1:]:  # Skip header
                                 sys_type = None
                                 sys_name = meas.get("distribution")
-                                if sys_name is None or "Water Samples" in sys_name:
+                                if sys_name is None or "Water Samples" in sys_name or sys_name.strip() == "":
+                                    print(f"Warning: Skipping invalid measurement in {file_path}: distribution={sys_name}")
                                     continue
                                 # Standardize parameters
                                 standard_dict = {}
@@ -181,13 +201,15 @@ for directory in [hr_dir, pr_dir]:
                                         standard = column_mapping.get(cleaned, cleaned.lower())
                                         val = meas.get(raw_key)
                                         standard_dict[standard] = str(val) if val and val != '' else None
-                                values = [doc_id, facility, date, chemist, sys_type, sys_name] + [ standard_dict.get(p, None) for p in params]
+                                values = [doc_id, facility, date, chemist, sys_type, sys_name] + [standard_dict.get(p, None) for p in params]
                                 placeholders = ','.join(['?'] * len(values))
-                                columns = 'document_id, facility_name, date, chemist, system_type, system_name' + ( ', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
+                                columns = 'document_id, facility_name, date, chemist, system_type, system_name' + (', ' + ', '.join([f'"{p}"' for p in params]) if params else '')
                                 cur.execute(f'INSERT INTO data ({columns}) VALUES ({placeholders})', values)
                                 inserted = True
                     if inserted:
                         conn.commit()
+                    else:
+                        print(f"Warning: No valid data inserted from {file_path}")
                 except Exception as e:
                     print(f"Error processing {file_path}: {e}")
 
@@ -195,12 +217,11 @@ for directory in [hr_dir, pr_dir]:
 conn.close()
 
 # Export to MSSQL
-# Configure your MSSQL connection details here
-server = 'your_server_name'  # e.g., 'localhost'
+server = 'your_server_name'
 database = 'your_database_name'
 username = 'your_username'
 password = 'your_password'
-driver = '{ODBC Driver 17 for SQL Server}'  # Adjust based on your installed ODBC driver
+driver = '{ODBC Driver 17 for SQL Server}'
 conn_str = f'DRIVER={driver};SERVER={server};DATABASE={database};UID={username};PWD={password}'
 
 try:

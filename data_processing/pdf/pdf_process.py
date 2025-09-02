@@ -23,7 +23,7 @@ def extract_data_from_pdf(filename: str) -> Dict:
         if not pdf.pages:
             raise ValueError("PDF has no pages.")
 
-        # Extract text from the first page
+        # Extract text from the first page for header info
         page1_text = pdf.pages[0].extract_text()
         if page1_text is None:
             raise ValueError("Could not extract text from the first page.")
@@ -64,15 +64,15 @@ def extract_data_from_pdf(filename: str) -> Dict:
             if facility_match:
                 extracted_data["facility_name"] = "Giant City SP"
 
-        # Extract tables from all pages after the first
+        # Extract tables from all pages
         systems = []
-        known_headers = ['#', 'System Type', 'System Name', 'Cond.', 'pH', 'Temp', 'P Alk', 'M Alk', 'Chloride',
+        known_headers = ['#', 'System Type', 'System Name', 'Cond.', 'pH', 'Temp', 'P Alk', 'M Alk', 'OH Alk', 'Chloride',
                          'Hardness', 'Calcium', 'PO4', 'SO2', 'Mo', 'NO2', 'Live ATP', 'Glycol', 'Free Chlorine',
                          'Total Chlorine', 'Max Temp.']
 
-        for page in pdf.pages[1:]:
+        for page in pdf.pages:
             table = page.extract_table(
-                {"vertical_strategy": "lines", "horizontal_strategy": "lines", "snap_tolerance": 4})
+                {"vertical_strategy": "lines", "horizontal_strategy": "lines", "snap_tolerance": 6})  # Increased tolerance
 
             if table is None or len(table) < 2:
                 table = page.extract_table({"vertical_strategy": "text", "horizontal_strategy": "lines"})
@@ -81,20 +81,25 @@ def extract_data_from_pdf(filename: str) -> Dict:
                 table = get_table_from_page(page)
 
             if table is None or len(table) < 2:
-                # Fallback to text parsing if still fails
                 page_text = page.extract_text()
                 if page_text is None:
                     continue
                 table = parse_table_from_text(page_text)
 
+            if table is None or len(table) < 2:
+                if page_text:
+                    systems.extend(parse_vertical_table_from_text(page_text))
+                continue
+
             # Process the table
-            full_table = all(len(row) == len(known_headers) for row in table if row) if table else False
+            full_table = all(len(row) == len(known_headers) for row in table if row)
             if full_table:
                 headers = known_headers
                 for row in table[1:]:
                     if not row or row[0] in ['', '-', None]:
                         continue
-                    system_data = dict(zip(headers, [v.strip() if v else None for v in row]))
+                    cleaned_row = [v.strip() if isinstance(v, str) else None for v in row]
+                    system_data = dict(zip(headers, cleaned_row))
                     if system_data.get('System Type') or system_data.get('System Name'):
                         systems.append(system_data)
             else:
@@ -103,33 +108,34 @@ def extract_data_from_pdf(filename: str) -> Dict:
                     if not row or not re.match(r'^\d+$|^\-$', str(row[0])):
                         continue
                     system_data = {'#': str(row[0])}
-                    system_type = row[1].strip() if len(row) > 1 else None
-                    system_name = row[2].strip() if len(row) > 2 else None
-                    values = [v.strip() if v else None for v in row[3:] if v and v.strip()]
+                    system_type = row[1].strip() if len(row) > 1 and row[1] is not None else None
+                    system_name = row[2].strip() if len(row) > 2 and row[2] is not None else None
+                    values = [v.strip() if isinstance(v, str) else None for v in row[3:] if isinstance(v, str) and v.strip()]
                     system_data['System Type'] = system_type
                     system_data['System Name'] = system_name
 
-                    if system_type and 'Dist' in system_type:
-                        n = len(values)
-                        if n >= 5:
-                            system_data['Cond.'] = values[0]
-                            system_data['pH'] = values[1]
-                            system_data['Temp'] = values[2]
-                            system_data['Free Chlorine'] = values[n - 2]
-                            system_data['Total Chlorine'] = values[n - 1]
-                            middle_values = values[3:n - 2]
-                            middle_cols = ['P Alk', 'M Alk', 'Chloride', 'Hardness', 'Calcium', 'PO4', 'SO2', 'Mo']
-                            for idx, col in enumerate(middle_cols):
-                                if idx < len(middle_values):
-                                    system_data[col] = middle_values[idx]
-                    elif system_type and 'Nitrite' in system_type:
-                        n = len(values)
-                        if n >= 3:
-                            system_data['Cond.'] = values[0]
-                            system_data['pH'] = values[1]
-                            system_data['NO2'] = values[2]
-                            if n > 3:
-                                system_data['Glycol'] = values[3]
+                    if system_type:
+                        if 'Dist' in system_type:
+                            n = len(values)
+                            if n >= 5:
+                                system_data['Cond.'] = values[0]
+                                system_data['pH'] = values[1]
+                                system_data['Temp'] = values[2]
+                                system_data['Free Chlorine'] = values[n - 2]
+                                system_data['Total Chlorine'] = values[n - 1]
+                                middle_values = values[3:n - 2]
+                                middle_cols = ['P Alk', 'M Alk', 'Chloride', 'Hardness', 'Calcium', 'PO4', 'SO2', 'Mo']
+                                for idx, col in enumerate(middle_cols):
+                                    if idx < len(middle_values):
+                                        system_data[col] = middle_values[idx]
+                        elif 'Nitrite' in system_type:
+                            n = len(values)
+                            if n >= 3:
+                                system_data['Cond.'] = values[0]
+                                system_data['pH'] = values[1]
+                                system_data['NO2'] = values[2]
+                                if n > 3:
+                                    system_data['Glycol'] = values[3]
 
                     if system_data.get('System Type') or system_data.get('System Name'):
                         systems.append(system_data)
@@ -137,6 +143,67 @@ def extract_data_from_pdf(filename: str) -> Dict:
         extracted_data["systems"] = systems
 
     return extracted_data
+
+
+def parse_vertical_table_from_text(text: str) -> List[Dict]:
+    """
+    Parser for vertically oriented tables where headers and values are on separate lines.
+    """
+    lines = [line.strip() for line in text.split('\n') if line.strip()]
+    systems = []
+    i = 0
+    possible_cols = ['Cond.', 'pH', 'Temp', 'P Alk', 'M Alk', 'OH Alk', 'Chloride', 'Hardness', 'Calcium', 'PO4',
+                     'SO2', 'Mo', 'NO2', 'Live ATP', 'Glycol', 'Free Cl', 'Total Cl', 'Max Temp.', 'Free Chlorine',
+                     'Total Chlorine', 'Temp (*C)', 'Max Temp (*C)']
+    while i < len(lines):
+        if lines[i] == 'Sample ID':
+            i += 1
+            cols = []
+            while i < len(lines) and lines[i] in possible_cols:
+                cols.append(lines[i])
+                i += 1
+            if not cols:
+                i += 1
+                continue  # No columns found, skip
+            # Now parse systems
+            while i < len(lines):
+                if lines[i].startswith('Range'):
+                    i += 1
+                    i += len(cols)  # Skip range values
+                    continue
+                # Collect sample_id lines until a value line
+                sample_id_lines = []
+                while i < len(lines) and not re.match(r'^\d+\.?\d*$|^\-*$|^\.$|^0$', lines[i]) and not lines[i].startswith('Range'):
+                    sample_id_lines.append(lines[i].strip())
+                    i += 1
+                if not sample_id_lines:
+                    i += 1
+                    continue
+                sample_id = ' '.join(sample_id_lines).strip()
+                # Determine type and name (improved for multi-word)
+                type_ = ''
+                name = sample_id
+                for possible_type in ['Cooling Tower (Mo)', 'CW Nitrite', 'MTW Nitrite', 'Dist', 'Boiler', 'Softener', 'Condensate']:
+                    if possible_type in sample_id:
+                        type_ = possible_type
+                        name = sample_id.replace(possible_type, '').strip()
+                        break
+                # Collect values
+                values = []
+                for _ in range(len(cols)):
+                    if i >= len(lines):
+                        break
+                    value = lines[i].strip() if lines[i] != '-' else None
+                    values.append(value)
+                    i += 1
+                system_data = {'System Name': name, 'System Type': type_}
+                for k, col in enumerate(cols):
+                    if k < len(values):
+                        system_data[col] = values[k]
+                systems.append(system_data)
+        else:
+            i += 1
+    return systems
 
 
 def get_table_from_page(page):
@@ -193,7 +260,7 @@ def get_table_from_page(page):
                     cell_text = ''.join(ww['text'] for ww in current_cell) if ' ' in [ww['text'] for ww in
                                                                                       current_cell] else ' '.join(
                         ww['text'] for ww in current_cell)
-                    row_cells.append((current_x, cell_text))
+                    row_cells.append((current_x, cell_text.strip()))
                 current_cell = [w]
                 current_x = w['x0']
             else:
@@ -202,7 +269,7 @@ def get_table_from_page(page):
             cell_text = ''.join(ww['text'] for ww in current_cell) if ' ' in [ww['text'] for ww in
                                                                               current_cell] else ' '.join(
                 ww['text'] for ww in current_cell)
-            row_cells.append((current_x, cell_text))
+            row_cells.append((current_x, cell_text.strip()))
 
         # Assign to columns
         row = [None] * len(columns)
@@ -229,7 +296,7 @@ def parse_table_from_text(text: str) -> List[List[str]]:
     i = 0
     while i < len(lines):
         line = lines[i]
-        if re.match(r'^\d+ ', line) or re.match(r'^\d+$', line) or re.match(r'^-', line):
+        if re.match(r'^\d+ ', line) or re.match(r'^\d+$', line) or re.match(r'^\-$', line):
             parts = re.split(r'\s+', line)
             num = parts[0]
             if len(parts) > 1:
@@ -249,6 +316,7 @@ def parse_table_from_text(text: str) -> List[List[str]]:
                     lines[i] == '0' or re.match(r'^\d+$', lines[i])):
                 row.append(lines[i])
                 i += 1
+            table.append(row)
         else:
             i += 1
     return table
